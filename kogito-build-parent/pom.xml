@@ -1081,14 +1081,24 @@
         <plugin>
           <artifactId>maven-failsafe-plugin</artifactId>
           <version>${version.surefire.plugin}</version>
-          <configuration>
-            <includes>
-              <include>${tests.failsafe.include}</include>
-            </includes>
-            <excludes>
-              <exclude>${tests.surefire.include}</exclude>
-            </excludes>
-          </configuration>
+          <executions>
+            <execution>
+              <id>integration-test</id>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+              <configuration>
+                <includes>
+                  <include>${tests.failsafe.include}</include>
+                </includes>
+                <excludes>
+                  <exclude>${tests.surefire.include}</exclude>
+                  <exclude>**/Native*</exclude>
+                </excludes>
+              </configuration>
+            </execution>
+          </executions>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

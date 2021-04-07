@@ -44,7 +44,7 @@ import static org.junit.Assert.assertEquals;
 
 @QuarkusTest
 @QuarkusTestResource(InfinispanQuarkusTestResource.Conditional.class)
-class TaskTest {
+class TaskIT {
 
     static {
         RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
