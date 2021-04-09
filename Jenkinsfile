@@ -28,12 +28,9 @@ pipeline {
                     mailer.buildLogScriptPR()
 
                     checkoutRepo('kogito-runtimes')
-                    checkoutRepo('kogito-runtimes', 'integration-tests')
                     checkoutOptaplannerRepo()
                     checkoutRepo('kogito-apps')
                     checkoutRepo('kogito-examples')
-                    checkoutRepo('kogito-examples', 'kogito-examples-persistence')
-                    checkoutRepo('kogito-examples', 'kogito-examples-events')
                 }
             }
         }
@@ -50,22 +47,10 @@ pipeline {
                 }
             }
         }
-        stage('Build Runtimes') {
+        stage('Build&Test Runtimes') {
             steps {
                 script {
-                    mvnCmd = getMavenCommand('kogito-runtimes', true, true)
-                    if (isNormalPRCheck()) {
-                        mvnCmd.withProperty('validate-formatting')
-                            .withProfiles(['run-code-coverage'])
-                    }
-                    mvnCmd.run('clean install')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runUnitTests('kogito-runtimes', { mvnCmd -> return isNormalPRCheck() ? mvnCmd.withProfiles(['run-code-coverage']) : mvnCmd })
                 }
             }
         }
@@ -89,101 +74,88 @@ pipeline {
                 }
             }
         }
-        stage('Check Runtimes integration-tests with persistence') {
+        stage('Build&Test OptaPlanner') {
             steps {
                 script {
-                    getMavenCommand('integration-tests', true, true)
-                        .withProfiles(['persistence'])
-                        .run('clean verify')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runUnitTests('optaplanner')
                 }
             }
         }
-        stage('Build OptaPlanner') {
+        stage('Build&Test Apps') {
             steps {
                 script {
-                    // Skip unnecessary plugins to save time.
-                    getMavenCommand('optaplanner', true, true)
-                        .withProperty('enforcer.skip')
-                        .withProperty('formatter.skip')
-                        .withProperty('impsort.skip')
-                        .withProperty('revapi.skip')
-                        .run('clean install')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runUnitTests('kogito-apps')
                 }
             }
         }
-        stage('Build Apps') {
+        stage('Build&Test Examples') {
             steps {
                 script {
-                    getMavenCommand('kogito-apps', true, true)
-                        .run('clean install')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runUnitTests('kogito-examples')
                 }
             }
         }
-        stage('Build Examples') {
+
+        stage('Run Runtimes integration-tests') {
             steps {
                 script {
-                    getMavenCommand('kogito-examples', true, true)
-                        .run('clean install')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runIntegrationTests('kogito-runtimes')
                 }
             }
         }
-        stage('Check Examples with persistence') {
+
+        stage('Run Runtimes integration-tests with persistence') {
             steps {
                 script {
-                    getMavenCommand('kogito-examples-persistence', true, true)
-                        .withProfiles(['persistence'])
-                        .run('clean verify')
-                }
-            }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+                    runIntegrationTests('kogito-runtimes', ['persistence'])
                 }
             }
         }
-        stage('Check Examples with events') {
+
+        stage('Run Apps integration-tests') {
             steps {
                 script {
-                    getMavenCommand('kogito-examples-events', true, true)
-                        .withProfiles(['events'])
-                        .run('clean verify')
+                    runIntegrationTests('kogito-apps')
                 }
             }
-            post {
-                cleanup {
-                    script {
-                        cleanContainers()
-                    }
+        }
+
+        stage('Run Apps integration-tests with persistence') {
+            steps {
+                script {
+                    runIntegrationTests('kogito-apps', ['persistence'])
+                }
+            }
+        }
+
+        stage('Run Apps integration-tests with events') {
+            steps {
+                script {
+                    runIntegrationTests('kogito-apps', ['events'])
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests') {
+            steps {
+                script {
+                    runIntegrationTests('kogito-examples')
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests with persistence') {
+            steps {
+                script {
+                    runIntegrationTests('kogito-examples', ['persistence'])
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests with events') {
+            steps {
+                script {
+                    runIntegrationTests('kogito-examples', ['events'])
                 }
             }
         }
@@ -192,7 +164,6 @@ pipeline {
         always {
             script {
                 sh '$WORKSPACE/trace.sh'
-                junit '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml'
             }
         }
         failure {
@@ -216,6 +187,10 @@ pipeline {
             }
         }
     }
+}
+
+void saveReports() {
+    junit testResults: '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml', allowEmptyResults: false
 }
 
 void checkoutRepo(String repo, String dirName=repo) {
@@ -262,6 +237,52 @@ MavenCommand getMavenCommand(String directory, boolean addQuarkusVersion=true, b
             .withProperty('quarkus.profile', 'native') // Added due to https://github.com/quarkusio/quarkus/issues/13341
     }
     return mvnCmd
+}
+
+void runUnitTests(String project, Closure mvnCmdModifier = null) {
+    mvnCmd = getMavenCommand(project, true, true)
+
+    if (project == 'optaplanner') {
+        mvnCmd.withProperty('enforcer.skip')
+            .withProperty('formatter.skip')
+            .withProperty('impsort.skip')
+            .withProperty('revapi.skip')
+    } else {
+        mvnCmd.withProperty('quickTests')
+    }
+    if (mvnCmdModifier) {
+        mvnCmd = mvnCmdModifier(mvnCmd)
+    }
+
+    try {
+        mvnCmd.run('clean install')
+    } catch (err) {
+        currentBuild.currentResult = 'FAILURE'
+    } finally {
+        saveReports()
+        cleanContainers()
+    }
+}
+
+void runIntegrationTests(String project, String profiles=[], Closure mvnCmdModifier = null) {
+    String itFolder = "${project}-it${profiles ? '-' + profiles.join('-') : ''}"
+    sh "cp -r ${project} ${itFolder}"
+
+    mvnCmd = getMavenCommand(itFolder, true, true)
+        .withProfiles(profiles)
+
+    if (mvnCmdModifier) {
+        mvnCmd = mvnCmdModifier(mvnCmd)
+    }
+
+    try {
+        mvnCmd.run('verify')
+    } catch (err) {
+        currentBuild.currentResult = 'FAILURE'
+    } finally {
+        saveReports()
+        cleanContainers()
+    }
 }
 
 void cleanContainers() {

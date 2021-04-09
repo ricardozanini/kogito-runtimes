@@ -96,7 +96,9 @@ pipeline {
         stage('Build & Test') {
             steps {
                 script {
-                    getMavenCommand().skipTests(params.SKIP_TESTS).run('clean install')
+                    getMavenCommand().
+                        .withProfiles([ params.SKIP_TESTS ? 'quickly' : 'quickTests' ])
+                        .run('clean install')
                 }
             }
             post {
@@ -105,20 +107,40 @@ pipeline {
                 }
             }
         }
-        stage('Check integration tests with persistence') {
+        stage('Run integration tests') {
+            when {
+                expression { return !params.SKIP_TESTS }
+            }
             steps {
                 script {
                     sh 'cp -r kogito-runtimes integration-tests'
 
                     getMavenCommand('integration-tests')
-                        .withProfiles(['persistence'])
-                        .skipTests(params.SKIP_TESTS)
-                        .run('clean verify')
+                        .run('verify')
                 }
             }
             post {
                 always {
-                    saveReports(params.SKIP_TESTS)
+                    saveReports()
+                }
+            }
+        }
+        stage('Run integration tests with persistence') {
+            when {
+                expression { return !params.SKIP_TESTS }
+            }
+            steps {
+                script {
+                    sh 'cp -r kogito-runtimes integration-tests-persistence'
+
+                    getMavenCommand('integration-tests-persistence')
+                        .withProfiles(['persistence'])
+                        .run('verify')
+                }
+            }
+            post {
+                always {
+                    saveReports()
                 }
             }
         }
