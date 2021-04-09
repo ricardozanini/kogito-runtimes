@@ -54,9 +54,7 @@ pipeline {
                         }
                     }
 
-                    dir(getRepoName()) {
-                        checkoutRepo()
-                    }
+                    helper.checkoutRepo(getRepoName(), getGitAuthor(), getBuildBranch())
                 }
             }
             post {
@@ -96,14 +94,11 @@ pipeline {
         stage('Build & Test') {
             steps {
                 script {
-                    getMavenCommand().
-                        .withProfiles([ params.SKIP_TESTS ? 'quickly' : 'quickTests' ])
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    saveReports(params.SKIP_TESTS)
+                    if (params.SKIP_TESTS) {
+                        helper.runQuickBuild(getMavenCommand())
+                    } else {
+                        helper.runUnitTests(getMavenCommand())
+                    }
                 }
             }
         }
@@ -113,15 +108,7 @@ pipeline {
             }
             steps {
                 script {
-                    sh 'cp -r kogito-runtimes integration-tests'
-
-                    getMavenCommand('integration-tests')
-                        .run('verify')
-                }
-            }
-            post {
-                always {
-                    saveReports()
+                    helper.runIntegrationTests(getMavenCommand())
                 }
             }
         }
@@ -131,16 +118,7 @@ pipeline {
             }
             steps {
                 script {
-                    sh 'cp -r kogito-runtimes integration-tests-persistence'
-
-                    getMavenCommand('integration-tests-persistence')
-                        .withProfiles(['persistence'])
-                        .run('verify')
-                }
-            }
-            post {
-                always {
-                    saveReports()
+                    helper.runIntegrationTests(getMavenCommand(), ['persistence'])
                 }
             }
         }
@@ -150,14 +128,14 @@ pipeline {
                     // Usually `env.MAVEN_DEPLOY_REPOSITORY` is used for testing purpose
                     if (env.MAVEN_DEPLOY_REPOSITORY && env.MAVEN_REPO_CREDS_ID) {
                         // Deploy to specific repository with credentials
-                        runMavenDeployLocally()
+                        runMavenDeploy(true)
                         maven.uploadLocalArtifacts(env.MAVEN_REPO_CREDS_ID, getLocalDeploymentFolder(), getMavenRepoZipUrl())
                     } else if (!isRelease() || env.MAVEN_DEPLOY_REPOSITORY) {
                         // Normal deploy
                         runMavenDeploy()
                     } else {
                         // Deploy locally and then to staging
-                        runMavenDeployLocally()
+                        runMavenDeploy(true)
                         runMavenStage()
                     }
                 }
@@ -204,15 +182,6 @@ pipeline {
             }
         }
     }
-}
-
-void saveReports(boolean allowEmpty=false) {
-    junit testResults: '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml', allowEmptyResults: allowEmpty
-}
-
-void checkoutRepo() {
-    deleteDir()
-    checkout(githubscm.resolveRepository(getRepoName(), getGitAuthor(), getBuildBranch(), false))
 }
 
 void prepareForPR() {
@@ -272,33 +241,26 @@ void setDeployPropertyIfNeeded(String key, def value) {
     }
 }
 
-MavenCommand getMavenCommand(String directory = '') {
-    directory = directory ?: getRepoName()
-    return new MavenCommand(this, ['-fae'])
+MavenCommand getMavenCommand() {
+    return helper.getMavenCommand(getRepoName())
                 .withSettingsXmlId(env.MAVEN_SETTINGS_CONFIG_FILE_ID)
-                .inDirectory(directory)
                 .withProperty('full')
 }
 
-void runMavenDeploy() {
+void runMavenDeploy(boolean localDeploy = false) {
     mvnCmd = getMavenCommand()
 
-    if (env.MAVEN_DEPLOY_REPOSITORY) {
+    if (localDeploy) {
+        mvnCmd.withLocalDeployFolder(getLocalDeploymentFolder())
+    } else if (env.MAVEN_DEPLOY_REPOSITORY) {
         mvnCmd.withDeployRepository(env.MAVEN_DEPLOY_REPOSITORY)
     }
 
-    mvnCmd.skipTests(true).run('clean deploy')
+    mvnCmd.withProperty('quickly').run('clean deploy')
 }
 
 String getMavenRepoZipUrl() {
     return "${env.MAVEN_DEPLOY_REPOSITORY.replaceAll('/content/', '/service/local/').replaceFirst('/*$', '')}/content-compressed"
-}
-
-void runMavenDeployLocally() {
-    getMavenCommand()
-        .skipTests(true)
-        .withLocalDeployFolder(getLocalDeploymentFolder())
-        .run('clean deploy')
 }
 
 void runMavenStage() {

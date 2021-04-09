@@ -2,6 +2,8 @@
 
 import org.kie.jenkins.MavenCommand
 
+helper = null
+
 pipeline {
     agent {
         label 'kie-rhel7 && kie-mem16g'
@@ -21,29 +23,26 @@ pipeline {
         MAVEN_OPTS = '-Xms1024m -Xmx4g'
     }
     stages {
-        stage('Checkout') {
+        stage('Initialize') {
             steps {
                 script {
-                    checkout(githubscm.resolveRepository('kogito-runtimes', params.GIT_AUTHOR, params.BUILD_BRANCH_NAME, false))
+                    helper = load '.jenkins/scripts/helper.groovy'
+
+                    helper.checkoutRepo(kogitoRuntimesRepo, params.GIT_AUTHOR, params.BUILD_BRANCH_NAME)
                 }
             }
         }
         stage('Build') {
             steps {
                 script {
-                    getMavenCommand()
-                        .withProfiles(['run-code-coverage'])
-                        .run('clean install')
+                    helper.runUnitTests(getMavenCommand(kogitoRuntimesRepo).withProfiles(['run-code-coverage']))
                 }
             }
         }
         stage('Analyze') {
             steps {
                 script {
-                    getMavenCommand()
-                        .withOptions(['-e', '-nsu'])
-                        .withProfiles(['sonarcloud-analysis'])
-                        .run('validate')
+                    helper.runSonarcloudAnalysis(getMavenCommand(kogitoRuntimesRepo))
                 }
             }
         }
@@ -55,11 +54,6 @@ pipeline {
                      subject: "[${params.BUILD_BRANCH_NAME}][d] Runtimes Sonar",
                      to: env.KOGITO_CI_EMAIL_TO
         }
-        always {
-            script {
-                junit '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml'
-            }
-        }
         cleanup {
             script {
                 util.cleanNode('docker')
@@ -69,6 +63,5 @@ pipeline {
 }
 
 MavenCommand getMavenCommand() {
-    return new MavenCommand(this, ['-fae'])
-                .withSettingsXmlId('kogito_release_settings')
+    return helper.getMavenCommand(kogitoRuntimesRepo)
 }

@@ -2,6 +2,8 @@
 
 import org.kie.jenkins.MavenCommand
 
+helper = null
+
 pipeline {
     agent {
         label 'kie-rhel7 && kie-mem16g'
@@ -20,22 +22,21 @@ pipeline {
         KOGITO_CI_EMAIL_TO = credentials("${JENKINS_EMAIL_CREDS_ID}")
         MAVEN_OPTS = '-Xms1024m -Xmx4g'
 
-        // Set into 'Initialize' stage
-        // DROOLS_VERSION
+    // Set into 'Initialize' stage
+    // DROOLS_VERSION
     }
     stages {
         stage('Initialize') {
             steps {
                 script {
-                    checkoutDroolsRepo()
+                    helper = load '.jenkins/scripts/helper.groovy'
 
-                    checkoutRepo('kogito-runtimes')
-                    checkoutRepo('kogito-runtimes', 'integration-tests')
-                    checkoutOptaplannerRepo()
-                    checkoutRepo('kogito-apps')
-                    checkoutRepo('kogito-examples')
-                    checkoutRepo('kogito-examples', 'kogito-examples-persistence')
-                    checkoutRepo('kogito-examples', 'kogito-examples-events')
+                    helper.checkoutDroolsRepo()
+
+                    checkoutRepo(kogitoRuntimesRepo)
+                    checkoutRepo(optaplannerRepo)
+                    checkoutRepo(kogitoAppsRepo)
+                    checkoutRepo(kogitoExamplesRepo)
                 }
             }
         }
@@ -54,123 +55,102 @@ pipeline {
                 }
             }
         }
-        stage('Build kogito-runtimes') {
+        stage('Build&Test Runtimes') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('kogito-runtimes')
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runUnitTests(getMavenCommandWithDroolsVersion(kogitoRuntimesRepo))
                 }
             }
         }
-        stage('Check Runtimes integration-tests with persistence') {
+        stage('Build&Test OptaPlanner') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('integration-tests')
-                        .withProfiles(['persistence'])
-                        .run('clean verify')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runUnitTests(getMavenCommandWithDroolsVersion(optaplannerRepo))
                 }
             }
         }
-        stage('Build optaplanner') {
+        stage('Build&Test Apps') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('optaplanner')
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runUnitTests(getMavenCommandWithDroolsVersion(kogitoAppsRepo))
                 }
             }
         }
-        stage('Build kogito-apps') {
+        stage('Build&Test Examples') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('kogito-apps')
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runUnitTests(getMavenCommandWithDroolsVersion(kogitoExamplesRepo))
                 }
             }
         }
-        stage('Build kogito-examples') {
+
+        stage('Run Runtimes integration-tests') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('kogito-examples')
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoRuntimesRepo))
                 }
             }
         }
-        stage('Build kogito-examples with persistence') {
+
+        stage('Run Runtimes integration-tests with persistence') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('kogito-examples-persistence')
-                        .withProfiles(['persistence'])
-                        .run('clean verify')
-                }
-            }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoRuntimesRepo), ['persistence'])
                 }
             }
         }
-        stage('Build kogito-examples with events') {
+
+        stage('Run Apps integration-tests') {
             steps {
                 script {
-                    getMavenCommandWithDroolsVersion('kogito-examples-events')
-                        .withProfiles(['events'])
-                        .run('clean verify')
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoAppsRepo))
                 }
             }
-            post {
-                always {
-                    script {
-                        cleanContainers()
-                    }
+        }
+
+        stage('Run Apps integration-tests with persistence') {
+            steps {
+                script {
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoAppsRepo), ['persistence'])
+                }
+            }
+        }
+
+        stage('Run Apps integration-tests with events') {
+            steps {
+                script {
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoAppsRepo), ['events'])
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests') {
+            steps {
+                script {
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoExamplesRepo))
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests with persistence') {
+            steps {
+                script {
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoExamplesRepo), ['persistence'])
+                }
+            }
+        }
+
+        stage('Run Examples integration-tests with events') {
+            steps {
+                script {
+                    helper.runIntegrationTests(getMavenCommandWithDroolsVersion(kogitoExamplesRepo), ['events'])
                 }
             }
         }
     }
     post {
         unsuccessful {
-            sendNotification()
-        }
-        always {
-            script {
-                junit '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml'
-            }
+            helper.sendNotification('Runtimes Drools snapshot')
         }
         cleanup {
             script {
@@ -180,47 +160,15 @@ pipeline {
     }
 }
 
-void sendNotification() {
-    emailext body: "Kogito daily Drools #${BUILD_NUMBER} was: ${currentBuild.currentResult}\nPlease look here: ${BUILD_URL}",
-             subject: "[${params.BUILD_BRANCH_NAME}][d] Runtimes Drools snapshot",
-             to: env.KOGITO_CI_EMAIL_TO
-}
-
-void checkoutRepo(String repoName, String dirName=repoName) {
-    dir(dirName) {
-        checkout(githubscm.resolveRepository(repoName, params.GIT_AUTHOR, params.BUILD_BRANCH_NAME, false))
-    }
-}
-
-void checkoutDroolsRepo() {
-    dir('drools') {
-        checkout(githubscm.resolveRepository('drools', 'kiegroup', 'master', false))
-    }
-}
-
-void checkoutOptaplannerRepo() {
-    String targetBranch = params.BUILD_BRANCH_NAME
-    String [] versionSplit = targetBranch.split("\\.")
-    if (versionSplit.length == 3
-        && versionSplit[0].isNumber()
-        && versionSplit[1].isNumber()
-       && versionSplit[2] == 'x') {
-        targetBranch = "${Integer.parseInt(versionSplit[0]) + 7}.${versionSplit[1]}.x"
+void checkoutRepo(String repo) {
+    if (repo == optaplannerRepo) {
+        helper.checkoutRepo(repo, params.GIT_AUTHOR, helper.getOptaplannerReleaseBranch(params.BUILD_BRANCH_NAME))
     } else {
-        echo "Cannot parse branch as release branch so going further with current value: ${targetBranch}"
-    }
-    dir('optaplanner') {
-        checkout(githubscm.resolveRepository('optaplanner', params.GIT_AUTHOR, targetBranch, false))
+        helper.checkoutRepo(repo, params.GIT_AUTHOR, params.BUILD_BRANCH_NAME)
     }
 }
 
-MavenCommand getMavenCommandWithDroolsVersion(String directory) {
-    return new MavenCommand(this, ['-fae'])
-                .withSettingsXmlId('kogito_release_settings')
-                .inDirectory(directory)
+MavenCommand getMavenCommandWithDroolsVersion(String project) {
+    return helper.getMavenCommand(project)
                 .withProperty('version.org.kie7', "${DROOLS_VERSION}")
-}
-
-void cleanContainers() {
-    cloud.cleanContainersAndImages('docker')
 }
